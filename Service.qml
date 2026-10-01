@@ -119,12 +119,48 @@ Item {
 
   // Persist the plugin entry via the shell API. updateEntryInline replaces
   // the entry object; the shell preserves `id` and we must not drop fields.
+  // Always refresh the menu row on top of the config write.
   function persistSettings() {
-    if (!service.shell || typeof service.shell.updateEntryInline !== "function") return
-    service.shell.updateEntryInline(service.pluginId, {
-      comma: service.settings.comma,
-      period: service.settings.period
-    })
+    if (service.shell && typeof service.shell.updateEntryInline === "function") {
+      service.shell.updateEntryInline(service.pluginId, {
+        comma: service.settings.comma,
+        period: service.settings.period
+      })
+    }
+    service.syncMenu()
+  }
+
+  // Update the Omarchy menu extension rows so each slot shows the assigned
+  // app. The menu hot-reloads the extension file, so the row label/icon
+  // reflect the assignment without a shell restart. Path is derived from
+  // the plugin install directory (deterministic, no PATH dependence).
+  function syncMenu() {
+    // Small delay so the just-persisted settings are visible to the helper
+    // before it reads current assignment state.
+    menuSyncTimer.restart()
+  }
+
+  Timer {
+    id: menuSyncTimer
+    interval: 300
+    repeat: false
+    onTriggered: {
+      var script = service.home + "/.config/omarchy/plugins/"
+        + service.pluginId + "/bin/omarchy-hot-apps-menu"
+      menuSyncProc.command = ["bash", script]
+      menuSyncProc.running = true
+    }
+  }
+
+  Process {
+    id: menuSyncProc
+    command: []
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err && err !== "0" && err !== "ok") console.warn("hot-apps menu sync:", err)
+      }
+    }
   }
 
   function registerBinds() {
@@ -369,6 +405,17 @@ Item {
       service.settings = next
       service.persistSettings()
       service.notify("Hot Apps: " + slot + " → " + id)
+      return "ok"
+    }
+
+    function clear(slot: string): string {
+      slot = String(slot || "")
+      var next = Toggler.mergeSettings(service.settings, slot, {
+        desktopId: "",
+        knownClass: ""
+      })
+      service.settings = next
+      service.persistSettings()
       return "ok"
     }
 

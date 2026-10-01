@@ -84,10 +84,11 @@ Item {
 
   function assign(id) {
     if (!id) return
-    // Do not depend on service injection (unreliable for menu-kind panels):
-    // persist via the CLI IPC, which the service handles. omarchy-shell is on
-    // the shell's PATH (verified).
-    Quickshell.execDetached(["omarchy-shell", "hot-apps", "set", root.slot, id])
+    // Persist via the CLI IPC. Use the string form (Menu.qml's runAction
+    // pattern) with an absolute path — execDetached does not resolve
+    // PATH-dependent commands reliably from the panel's environment.
+    Util.execDetached("/usr/share/omarchy/bin/omarchy-shell hot-apps set "
+      + Util.shellQuote(root.slot) + " " + Util.shellQuote(id))
     root.close()
   }
 

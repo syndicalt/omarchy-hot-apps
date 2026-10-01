@@ -1,0 +1,112 @@
+#!/bin/bash
+# omarchy:summary=Update the Hot Apps slot rows in the Omarchy menu extension
+# omarchy:internal
+#
+# Patches the "setup.hotapps.slot1"/"setup.hotapps.slot2" rows in the user's
+# omarchy-menu.jsonc so each row shows the assigned app (label/description)
+# and a per-app Nerd Font glyph (icon). The menu hot-reloads the extension
+# file on save, so rows update live. Pure text patch: only the two row
+# objects are touched; all other user entries are preserved.
+
+set -euo pipefail
+
+MENU_FILE="${HOME}/.config/omarchy/extensions/omarchy-menu.jsonc"
+[ -f "$MENU_FILE" ] || exit 0
+
+# icon  label        desktop-id
+SLOT1_ICON=.
+SLOT1_LABEL=.
+SLOT1_DESC=.
+SLOT2_ICON=.
+SLOT2_LABEL=.
+SLOT2_DESC=.
+
+read_slot() { # $1=slot  $2=varprefix
+  local slot="$1" pfx="$2"
+  local json
+  json=$(omarchy-shell hot-apps list 2>/dev/null || echo "[]")
+  local id name icon
+  id=$(printf '%s' "$json" | jq -r --arg s "$slot" '.[] | select(.slot==$s) | .desktopId // empty' 2>/dev/null || true)
+  name=$(printf '%s' "$json" | jq -r --arg s "$slot" '.[] | select(.slot==$s) | .desktopId // empty' 2>/dev/null || true)
+  # Resolve display name + icon from the installed desktop entry when possible.
+  if [ -n "$id" ]; then
+    local entry
+    entry=$(find "${HOME}/.local/share/applications" "/usr/share/applications" -maxdepth 1 -iname "$id.desktop" 2>/dev/null | head -n1)
+    if [ -n "$entry" ]; then
+      name=$(sed -n 's/^Name=//p' "$entry" | head -n1)
+      icon=$(sed -n 's/^Icon=//p' "$entry" | head -n1)
+    fi
+  fi
+  eval "${pfx}_LABEL=\"\$name\""
+  eval "${pfx}_ICON=\"\$icon\""
+  eval "${pfx}_DESC=\"\$id\""
+}
+
+read_slot comma SLOT1
+read_slot period SLOT2
+
+python3 - "$MENU_FILE" "$SLOT1_ICON" "$SLOT1_LABEL" "$SLOT1_DESC" "$SLOT2_ICON" "$SLOT2_LABEL" "$SLOT2_DESC" <<'PY'
+import json, re, sys
+
+path, i1, l1, d1, i2, l2, d2 = sys.argv[1:8]
+
+def glyph(icon):
+    # A per-app Nerd Font glyph; falls back to the generic Hot Apps glyph.
+    m = {
+        "discord": "\uf5ee",
+        "zoom": "\uf7a9",
+        "chromium": "\uf7a9", "google-chrome": "\uf7a9", "firefox": "\uf269",
+        "spotify": "\uf1bc", "code": "\uf470", "cloud_icon": "\uf121",
+    }
+    return m.get(icon, "\uf5ee")
+
+def strip_jsonc(text):
+    out=[]; i=0; instr=False
+    while i<len(text):
+        c=text[i]
+        if instr:
+            out.append(c)
+            if c=='\\': out.append(text[i+1]); i+=2; continue
+            if c=='"': instr=False
+            i+=1; continue
+        if c=='"': instr=True; out.append(c); i+=1; continue
+        if c=='/' and i+1<len(text) and text[i+1]=='/':
+            while i<len(text) and text[i]!='\n': i+=1
+            continue
+        if c=='/' and i+1<len(text) and text[i+1]=='*':
+            i+=2
+            while i<len(text) and not (text[i]=='*' and i+1<len(text) and text[i+1]=='/'): i+=1
+            i+=2; continue
+        out.append(c); i+=1
+    return ''.join(out)
+
+t=open(path).read()
+body=strip_jsonc(t)
+body=re.sub(r',(\s*})', r'\1', body)
+try:
+    d=json.loads(body)
+except Exception:
+    # If the user file is malformed, rewrite only our rows is all we can do —
+    # leave it untouched and let the menu report the parse error.
+    sys.exit(0)
+
+def row(slot, icon, label, desc, glyph_):
+    return {
+        "icon": glyph_,
+        "label": "Slot 1 (,)" if slot=="comma" else "Slot 2 (.)",
+        "description": ("%s — %s" % (desc, label)) if desc else "SUPER + SHIFT + ," if slot=="comma" else "SUPER + SHIFT + .",
+        "checked": "[ \"$(omarchy-shell hot-apps list 2>/dev/null | jq -r '.[] | select(.slot==\"%s\") | .desktopId // empty')\" != \"\" ]" % slot,
+        "action": "omarchy-shell shell summon syndicalt.hot-apps '{\"slot\":\"%s\"}'" % slot,
+    }
+
+d["setup.hotapps"] = d.get("setup.hotapps", {"icon":"\uf5ee","label":"Hot Apps"})
+d["setup.hotapps.slot1"] = row("comma", i1, l1, d1, glyph(i1))
+d["setup.hotapps.slot2"] = row("period", i2, l2, d2, glyph(i2))
+
+# Write back with our comment header preserved if present, else plain JSON.
+head = t[:t.index('{')+1] if t.lstrip().startswith('{') else '{\n'
+out = json.dumps(d, ensure_ascii=False, indent=2)
+open(path,'w').write(head + "\n" + out[1:] + "\n")
+PY
+
+exit 0
