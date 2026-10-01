@@ -107,18 +107,6 @@ omarchy plugin remove syndicalt.hot-apps
 
 That deletes the plugin directory and its shell.json entry.
 
-## Migrating from the permanent Outlook/Teams setup
-
-If you previously had hardcoded PWA bindings in `~/.config/hypr/bindings.lua`
-(`hl.unbind("SUPER + SHIFT + comma")` + `o.bind(...)`), window rules in
-`hyprland.lua`, and autostart lines in `autostart.lua` — delete them all; the
-plugin replaces those paths. Then reassign Outlook/Teams to the slots:
-
-```bash
-omarchy-hot-apps set comma chrome-faolnafnngnfdaknnbpnkhgohbobgegn-Default
-omarchy-hot-apps set period chrome-ompifgpmddkgmclendfeacglnodjjndh-Default
-```
-
 ## Troubleshooting
 
 ```bash
