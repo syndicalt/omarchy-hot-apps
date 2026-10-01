@@ -91,14 +91,10 @@ Item {
 
   // -------------------------------------------------------- Hyprland calls
 
-  // All Hyprland mutations go through `hyprctl dispatch` with a Lua
-  // expression. This Hyprland's Lua shim makes `hyprctl eval "hl.dsp...."`
-  // return "ok" while silently NOT executing window moves; only dispatch
-  // actually applies them.
   // Mutations that reach a Hyprland dispatcher (window.move, workspace
-  // toggle, exec_cmd) go through `hyprctl dispatch` — the Lua-shim's
-  // `hl.dispatch` actually applies them, where `hyprctl eval` silently
-  // returns "ok" without executing.
+  // toggle, exec_cmd) must go through `hyprctl dispatch` — this Hyprland's
+  // Lua shim applies `hl.dispatch` there, while `hyprctl eval "hl.dsp...."`
+  // returns "ok" without actually executing window moves.
   function runDispatch(lua) {
     evalProc.command = ["hyprctl", "dispatch", lua]
     evalProc.running = true
@@ -211,22 +207,22 @@ Item {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   }
 
-  function knownClassPattern(slot) {
-    var s = service.settingsFor(slot)
-    if (s.knownClass) return s.knownClass
-    if (!s.desktopId) return ""
-    // Loose substring: a webapp launched from a desktop entry gets a
-    // URL-derived class (chrome-discord.com__...-Default) that contains the
-    // desktop id but does not start with it. Matching is case-insensitive.
-    return service.escapeRegex(Toggler.normalizeDesktopId(s.desktopId))
-  }
-
   function findWindow(slot) {
-    var pattern = service.knownClassPattern(slot)
-    if (!pattern.length || service.clients.length === 0) return null
-    var re = new RegExp(pattern, "i")
-    for (var i = 0; i < service.clients.length; i++) {
-      var c = service.clients[i]
+    if (service.clients.length === 0) return null
+    var s = service.settingsFor(slot)
+    if (!s.knownClass && !s.desktopId) return null
+    var needle = s.knownClass || Toggler.normalizeDesktopId(s.desktopId)
+    var re = new RegExp(service.escapeRegex(needle), "i")
+    var lower = needle.toLowerCase()
+    // Exact class match wins over the loose pattern so a sibling app that
+    // merely contains the id (code vs code-oss) is never picked when both run.
+    var i, c
+    for (i = 0; i < service.clients.length; i++) {
+      c = service.clients[i]
+      if (typeof c.class === "string" && c.class.toLowerCase() === lower) return c
+    }
+    for (i = 0; i < service.clients.length; i++) {
+      c = service.clients[i]
       if (typeof c.class === "string" && re.test(c.class)) return c
     }
     return null
@@ -404,6 +400,10 @@ Item {
       })
       service.settings = next
       service.persistSettings()
+      var other = slot === "comma" ? "period" : "comma"
+      var otherId = service.settingsFor(other).desktopId
+      if (otherId && otherId.toLowerCase() === id.toLowerCase())
+        service.notify("Hot Apps: " + other + " slot also has " + id + " — the two slots will fight over one window")
       service.notify("Hot Apps: " + slot + " → " + id)
       return "ok"
     }
@@ -542,7 +542,7 @@ Item {
     function onRawEvent(event) {
       var name = String(event.name)
       if (name === "configreloaded") {
-        service.rebindTimer.restart()
+        rebindTimer.restart()
         service.reapplyRules()
         return
       }

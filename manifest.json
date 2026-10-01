@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "syndicalt.hot-apps",
   "name": "Hot Apps",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "syndicalt",
   "description": "Two configurable hotkeys that launch, show, or hide any installed app on its own special workspace.",
   "kinds": [

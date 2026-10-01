@@ -2,7 +2,7 @@
 
 // Pure logic for Hot Apps: slot settings normalization and merge, plus
 // shell-quoting and command construction. No QML state lives here so every
-// function is testable from plain JS (and by the smoke script in bin/).
+// function is testable from plain JS.
 
 var SLOT_KEYS = ["comma", "period"]
 
@@ -89,8 +89,4 @@ function shellQuote(value) {
 // uses (supports ids with spaces and entries UWSM rejects).
 function launchCommand(desktopId) {
   return "gtk-launch " + shellQuote(String(desktopId || "") + ".desktop")
-}
-
-function hasConflict(settings) {
-  return normalizeSlot(settings.comma).special === normalizeSlot(settings.period).special
 }

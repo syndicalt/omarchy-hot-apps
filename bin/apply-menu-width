@@ -1,0 +1,37 @@
+#!/bin/bash
+# omarchy:summary=Widen the Hot Apps menu page (idempotent Menu.qml patch)
+# omarchy:internal
+#
+# The Omarchy menu's card width is hardcoded in its Menu.qml (300 for browse
+# menus). This script adds "setup.hotapps" to the wide-card special cases so
+# the Hot Apps page opens wider and long app titles elide later. Needs root
+# because Menu.qml is pacman-owned (omarchy package) — re-run after omarchy
+# updates; it is idempotent and refuses to patch an unrecognized file.
+
+set -euo pipefail
+
+MENU_QML="${1:-/usr/share/omarchy/shell/plugins/menu/Menu.qml}"
+[ -f "$MENU_QML" ] || { echo "Menu.qml not found: $MENU_QML" >&2; exit 1; }
+
+# Idempotency marker: the exact clause this script inserts.
+if grep -qF '"setup.hotapps" ? Style.space(420)' "$MENU_QML"; then
+  echo "already patched"
+  exit 0
+fi
+
+OLD='root.activeMenu === "style.font") ? Style.space(520) : Style.space(300)'
+NEW='root.activeMenu === "style.font") ? Style.space(520) : (root.activeMenu === "setup.hotapps" ? Style.space(420) : Style.space(300))'
+if ! grep -qF "$OLD" "$MENU_QML"; then
+  echo "Unexpected Menu.qml (omarchy updated?): width expression not found, not patched" >&2
+  exit 1
+fi
+
+python3 - "$MENU_QML" "$OLD" "$NEW" <<'PY'
+import sys
+
+path, old, new = sys.argv[1:4]
+text = open(path).read()
+assert text.count(old) == 1, "width expression matched more than once"
+open(path, "w").write(text.replace(old, new))
+PY
+echo "patched: Hot Apps menu card is now Style.space(420) wide"

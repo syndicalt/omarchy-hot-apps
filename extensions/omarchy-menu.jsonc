@@ -1,21 +1,17 @@
 {
 
   "setup.hotapps": {
-    "icon": "󰠖",
     "label": "Hot Apps"
   },
   "setup.hotapps.slot1": {
-    "icon": "",
     "label": "Slot 1 (,)",
-    "description": "discord — Discord",
-    "checked": "[ \"$(omarchy-shell hot-apps list 2>/dev/null | jq -r '.[] | select(.slot==\"comma\") | .desktopId // empty')\" != \"\" ]",
+    "description": "SUPER + SHIFT + ,",
     "action": "omarchy-shell shell summon syndicalt.hot-apps '{\"slot\":\"comma\"}'"
   },
   "setup.hotapps.slot2": {
-    "icon": "",
     "label": "Slot 2 (.)",
-    "description": "zoom — Zoom",
-    "checked": "[ \"$(omarchy-shell hot-apps list 2>/dev/null | jq -r '.[] | select(.slot==\"period\") | .desktopId // empty')\" != \"\" ]",
+    "description": "SUPER + SHIFT + .",
     "action": "omarchy-shell shell summon syndicalt.hot-apps '{\"slot\":\"period\"}'"
   }
 }
+

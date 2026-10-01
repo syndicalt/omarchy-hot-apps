@@ -3,110 +3,238 @@
 # omarchy:internal
 #
 # Patches the "setup.hotapps.slot1"/"setup.hotapps.slot2" rows in the user's
-# omarchy-menu.jsonc so each row shows the assigned app (label/description)
-# and a per-app Nerd Font glyph (icon). The menu hot-reloads the extension
-# file on save, so rows update live. Pure text patch: only the two row
-# objects are touched; all other user entries are preserved.
+# omarchy-menu.jsonc. Rows carry no icon (the menu cannot render app icons on
+# static rows) and no checkmark; instead the description shows the assigned
+# app's title. Surgical text patch: only the row object literals are rewritten
+# (and missing keys inserted); every comment, key order, and formatting choice
+# elsewhere in the file is preserved. A malformed file is left untouched so
+# the menu can report the parse error.
 
 set -euo pipefail
 
 MENU_FILE="${HOME}/.config/omarchy/extensions/omarchy-menu.jsonc"
 [ -f "$MENU_FILE" ] || exit 0
 
-# icon  label        desktop-id
-SLOT1_ICON=.
-SLOT1_LABEL=.
-SLOT1_DESC=.
-SLOT2_ICON=.
-SLOT2_LABEL=.
-SLOT2_DESC=.
+if command -v omarchy-shell >/dev/null 2>&1; then
+  LIST_JSON=$(omarchy-shell hot-apps list 2>/dev/null || echo "[]")
+else
+  LIST_JSON="[]"
+fi
 
 read_slot() { # $1=slot  $2=varprefix
-  local slot="$1" pfx="$2"
-  local json
-  json=$(omarchy-shell hot-apps list 2>/dev/null || echo "[]")
-  local id name icon
-  id=$(printf '%s' "$json" | jq -r --arg s "$slot" '.[] | select(.slot==$s) | .desktopId // empty' 2>/dev/null || true)
-  name=$(printf '%s' "$json" | jq -r --arg s "$slot" '.[] | select(.slot==$s) | .desktopId // empty' 2>/dev/null || true)
-  # Resolve display name + icon from the installed desktop entry when possible.
+  local slot="$1" pfx="$2" id="" name="" entry="" d
+  id=$(printf '%s' "$LIST_JSON" | jq -r --arg s "$slot" '.[] | select(.slot==$s) | .desktopId // empty' 2>/dev/null || true)
   if [ -n "$id" ]; then
-    local entry
-    entry=$(find "${HOME}/.local/share/applications" "/usr/share/applications" -maxdepth 1 -iname "$id.desktop" 2>/dev/null | head -n1)
+    # Resolve the app's display title from the installed desktop entry.
+    for d in "${HOME}/.local/share/applications" "/usr/share/applications"; do
+      [ -n "$entry" ] && break
+      [ -d "$d" ] || continue
+      entry=$(find "$d" -maxdepth 1 -iname "$id.desktop" 2>/dev/null | head -n1)
+    done
     if [ -n "$entry" ]; then
       name=$(sed -n 's/^Name=//p' "$entry" | head -n1)
-      icon=$(sed -n 's/^Icon=//p' "$entry" | head -n1)
     fi
   fi
-  eval "${pfx}_LABEL=\"\$name\""
-  eval "${pfx}_ICON=\"\$icon\""
-  eval "${pfx}_DESC=\"\$id\""
+  eval "${pfx}_NAME=\"\$name\""
+  eval "${pfx}_ID=\"\$id\""
 }
+
+SLOT1_NAME="" SLOT1_ID=""
+SLOT2_NAME="" SLOT2_ID=""
 
 read_slot comma SLOT1
 read_slot period SLOT2
 
-python3 - "$MENU_FILE" "$SLOT1_ICON" "$SLOT1_LABEL" "$SLOT1_DESC" "$SLOT2_ICON" "$SLOT2_LABEL" "$SLOT2_DESC" <<'PY'
-import json, re, sys
+python3 - "$MENU_FILE" "$SLOT1_NAME" "$SLOT1_ID" "$SLOT2_NAME" "$SLOT2_ID" <<'PY'
+import json, sys
 
-path, i1, l1, d1, i2, l2, d2 = sys.argv[1:8]
+path, n1, d1, n2, d2 = sys.argv[1:6]
 
-def glyph(icon):
-    # A per-app Nerd Font glyph; falls back to the generic Hot Apps glyph.
-    m = {
-        "discord": "\uf5ee",
-        "zoom": "\uf7a9",
-        "chromium": "\uf7a9", "google-chrome": "\uf7a9", "firefox": "\uf269",
-        "spotify": "\uf1bc", "code": "\uf470", "cloud_icon": "\uf121",
-    }
-    return m.get(icon, "\uf5ee")
+def skip_ws_comments(text, i):
+    """Advance past whitespace and comments; return the next index."""
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i = min(i + 2, n)
+        else:
+            break
+    return i
 
-def strip_jsonc(text):
-    out=[]; i=0; instr=False
-    while i<len(text):
-        c=text[i]
-        if instr:
-            out.append(c)
-            if c=='\\': out.append(text[i+1]); i+=2; continue
-            if c=='"': instr=False
-            i+=1; continue
-        if c=='"': instr=True; out.append(c); i+=1; continue
-        if c=='/' and i+1<len(text) and text[i+1]=='/':
-            while i<len(text) and text[i]!='\n': i+=1
+def match_delim(text, i):
+    """text[i] is '{' or '['. Return the index of its matching close brace,
+    skipping strings and comments; None if unbalanced or mismatched."""
+    close = "}" if text[i] == "{" else "]"
+    n = len(text)
+    depth = 0
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            if i >= n:
+                return None
+            i += 1
             continue
-        if c=='/' and i+1<len(text) and text[i+1]=='*':
-            i+=2
-            while i<len(text) and not (text[i]=='*' and i+1<len(text) and text[i+1]=='/'): i+=1
-            i+=2; continue
-        out.append(c); i+=1
-    return ''.join(out)
+        if c == "/" and i + 1 < n and text[i + 1] in "/*":
+            i = skip_ws_comments(text, i)
+            continue
+        if c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+            if depth == 0:
+                return i if c == close else None
+        i += 1
+    return None
 
-t=open(path).read()
-body=strip_jsonc(t)
-body=re.sub(r',(\s*})', r'\1', body)
-try:
-    d=json.loads(body)
-except Exception:
-    # If the user file is malformed, rewrite only our rows is all we can do —
-    # leave it untouched and let the menu report the parse error.
-    sys.exit(0)
+def skip_value(text, i):
+    """Skip one JSON value starting at i; return the index just past it."""
+    c = text[i]
+    if c == '"':
+        i += 1
+        while i < len(text) and text[i] != '"':
+            i += 2 if text[i] == "\\" else 1
+        return i + 1 if i < len(text) else None
+    if c in "{[":
+        end = match_delim(text, i)
+        return None if end is None else end + 1
+    while i < len(text) and text[i] not in ",}] \t\r\n":
+        i += 1
+    return i
 
-def row(slot, icon, label, desc, glyph_):
+def parse_top_level(text):
+    """Walk the root object. Return (entries, root_end, last_sig) where
+    entries maps key -> (val_start, val_end) for object-valued entries,
+    root_end is the index of the closing '}', and last_sig is the index of
+    the last significant (non-ws, non-comment) char before it. None if the
+    text is not a parseable top-level object."""
+    n = len(text)
+    i = skip_ws_comments(text, 0)
+    if i >= n or text[i] != "{":
+        return None
+    last_sig = i
+    i += 1
+    entries = {}
+    while True:
+        i = skip_ws_comments(text, i)
+        if i >= n:
+            return None
+        if text[i] == "}":
+            # Valid only if nothing but whitespace/comments follows the root.
+            if skip_ws_comments(text, i + 1) != n:
+                return None
+            return entries, i, last_sig
+        if text[i] == ",":
+            last_sig = i
+            i += 1
+            continue
+        if text[i] != '"':
+            return None
+        key_start = i
+        j = i + 1
+        while j < n and text[j] != '"':
+            j += 2 if text[j] == "\\" else 1
+        if j >= n:
+            return None
+        try:
+            key = json.loads(text[key_start:j + 1])
+        except ValueError:
+            return None
+        j = skip_ws_comments(text, j + 1)
+        if j >= n or text[j] != ":":
+            return None
+        j = skip_ws_comments(text, j + 1)
+        if j >= n:
+            return None
+        if text[j] == "{":
+            end = match_delim(text, j)
+            if end is None:
+                return None
+            entries[key] = (j, end)
+            last_sig = end
+            i = end + 1
+        else:
+            i = skip_value(text, j)
+            if i is None:
+                return None
+            last_sig = i - 1
+
+def dump_value(obj):
+    # First line unindented (sits right after `"key": `); continuation
+    # lines indented two past the key's own level.
+    body = json.dumps(obj, ensure_ascii=False, indent=2)
+    return "{\n" + "\n".join("  " + ln for ln in body.split("\n")[1:])
+
+def entry_text(key, obj):
+    return '  "%s": %s' % (key, dump_value(obj))
+
+PARENT_KEY = "setup.hotapps"
+
+def row(slot, title, ident):
+    base = "Slot 1 (,)" if slot == "comma" else "Slot 2 (.)"
+    hint = "SUPER + SHIFT + ," if slot == "comma" else "SUPER + SHIFT + ."
+    # The menu draws detail lines only during search (and then shows the
+    # parent path, not description), so the app title rides in the label.
+    label = base + " — " + (title or ident) if (title or ident) else base
     return {
-        "icon": glyph_,
-        "label": "Slot 1 (,)" if slot=="comma" else "Slot 2 (.)",
-        "description": ("%s — %s" % (desc, label)) if desc else "SUPER + SHIFT + ," if slot=="comma" else "SUPER + SHIFT + .",
-        "checked": "[ \"$(omarchy-shell hot-apps list 2>/dev/null | jq -r '.[] | select(.slot==\"%s\") | .desktopId // empty')\" != \"\" ]" % slot,
+        "label": label,
+        "description": title or ident or hint,
         "action": "omarchy-shell shell summon syndicalt.hot-apps '{\"slot\":\"%s\"}'" % slot,
     }
 
-d["setup.hotapps"] = d.get("setup.hotapps", {"icon":"\uf5ee","label":"Hot Apps"})
-d["setup.hotapps.slot1"] = row("comma", i1, l1, d1, glyph(i1))
-d["setup.hotapps.slot2"] = row("period", i2, l2, d2, glyph(i2))
+rows = {
+    "setup.hotapps.slot1": row("comma", n1, d1),
+    "setup.hotapps.slot2": row("period", n2, d2),
+}
 
-# Write back with our comment header preserved if present, else plain JSON.
-head = t[:t.index('{')+1] if t.lstrip().startswith('{') else '{\n'
-out = json.dumps(d, ensure_ascii=False, indent=2)
-open(path,'w').write(head + "\n" + out[1:] + "\n")
+text = open(path).read()
+parsed = parse_top_level(text)
+if parsed is None:
+    # Malformed or not an object: leave the file untouched.
+    sys.exit(0)
+entries, root_end, last_sig = parsed
+
+# Replacement spans (start, end, text), applied back-to-front.
+edits = []
+for key in ("setup.hotapps.slot1", "setup.hotapps.slot2"):
+    if key in entries:
+        vs, ve = entries[key]
+        edits.append((vs, ve + 1, dump_value(rows[key])))
+
+# The parent row is plugin-owned; keep any customized label.
+if PARENT_KEY in entries:
+    vs, ve = entries[PARENT_KEY]
+    try:
+        label = json.loads(text[vs:ve + 1]).get("label", "Hot Apps")
+    except ValueError:
+        label = "Hot Apps"
+    if not isinstance(label, str) or not label:
+        label = "Hot Apps"
+    edits.append((vs, ve + 1, dump_value({"label": label})))
+
+missing = [k for k in (PARENT_KEY, "setup.hotapps.slot1", "setup.hotapps.slot2") if k not in entries]
+if missing:
+    pieces = [entry_text(k, {"label": "Hot Apps"} if k == PARENT_KEY else rows[k]) for k in missing]
+    # Anchor right after the last significant char so a trailing comma is
+    # attached to the previous entry, not stranded on its own line; the
+    # span swallows the whitespace before the root's closing brace.
+    prev = text[last_sig]
+    lead = ",\n" if prev == "}" else ("\n" if prev in ",{" else ",\n")
+    edits.append((last_sig + 1, root_end, lead + ",\n".join(pieces) + "\n"))
+
+for vs, ve, rep in sorted(edits, key=lambda e: e[0], reverse=True):
+    text = text[:vs] + rep + text[ve:]
+open(path, "w").write(text)
 PY
 
 exit 0

@@ -111,6 +111,20 @@ Settings live inline on the plugin's entry in `~/.config/omarchy/shell.json`
 | `preload`    | `true`        | Start the app hidden at shell startup             |
 | `knownClass` | *(learned)*   | Window class Hyprland reports; set by the plugin  |
 
+### Menu width
+
+The Omarchy menu card is a hardcoded 300px for browse pages, which elides
+long app titles on the Hot Apps page. `bin/apply-menu-width` widens that
+one page to 420 (idempotent, refuses to patch an unrecognized `Menu.qml`):
+
+```bash
+sudo bash ~/.config/omarchy/plugins/syndicalt.hot-apps/bin/apply-menu-width
+```
+
+`Menu.qml` is pacman-owned, so **re-run this after every `omarchy` package
+update**. The shell hot-reloads QML, so the change applies without a restart.
+
+
 ## Remove
 
 ```bash
