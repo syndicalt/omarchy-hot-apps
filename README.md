@@ -31,12 +31,24 @@ omarchy plugin enable syndicalt.hot-apps
 
 ### Assign an app to a slot
 
+**From the Omarchy menu** (easiest): press `SUPER + SPACE` → **Setup → Hot
+Apps** → pick **Slot 1 (,) or Slot 2 (.)**. A searchable picker opens with all
+installed apps and icons; click an app to assign it to that slot. The slot row
+shows a ✓ when an app is assigned.
+
+The menu entries come from `extensions/omarchy-menu.jsonc` in this repo. Copy
+it into `~/.config/omarchy/extensions/omarchy-menu.jsonc`, or merge its
+`setup.hotapps*` entries into an existing extension file, and the menu loads
+them automatically (the shell hot-reloads menu extensions on save).
+
+**From the terminal:**
+
 ```bash
 # Assign Discord to the comma slot
 omarchy-hot-apps set comma discord
 
 # Search for apps
-omarchy-hot-apps apps fire
+omarchy-hot-apps apps ""          # full list (or a query like "zoom")
 
 # See both slots
 omarchy-hot-apps list
@@ -45,10 +57,10 @@ omarchy-hot-apps list
 omarchy-hot-apps clear period
 ```
 
-Or open the picker (search + icons, same app library as the launcher):
+Or open the picker directly:
 
 ```bash
-omarchy-hot-apps config comma
+omarchy-shell shell summon syndicalt.hot-apps '{"slot":"comma"}'
 ```
 
 ### Hotkeys

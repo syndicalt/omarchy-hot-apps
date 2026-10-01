@@ -41,20 +41,37 @@ Item {
   }
 
   function renderItems() {
-    if (!root.appLibrary) return
-    var rows = root.appLibrary.sortedEntries(root.filter)
+    // Enumerate desktop entries directly (DesktopEntries singleton, always
+    // available in Quickshell core). Do not depend on service/appLibrary
+    // injection into this panel — it is not guaranteed for a menu-kind plugin.
+    var values = DesktopEntries.applications.values || []
+    var q = root.filter.toLowerCase()
     var out = []
-    for (var i = 0; i < rows.length; i++) {
-      var e = rows[i].entry
+    for (var i = 0; i < values.length; i++) {
+      var e = values[i]
+      var id = String(e.id || "")
+      var name = String(e.name || id)
+      if (!id) continue
+      if (q && name.toLowerCase().indexOf(q) === -1
+        && id.toLowerCase().indexOf(q) === -1) continue
       out.push({
-        id: String(e.id || ""),
-        name: root.appLibrary.entryName(e),
-        subtext: root.appLibrary.entrySubtext(e),
-        icon: root.appLibrary.iconSource(String(e.icon || ""))
+        id: id,
+        name: name,
+        subtext: String(e.genericName || e.comment || ""),
+        icon: root.resolveIcon(String(e.icon || ""))
       })
     }
+    out.sort(function(a, b) { return a.name.localeCompare(b.name) })
     root.appRows = out
     root.renderCurrent()
+  }
+
+  // Icon lookup without the appLibrary injector: try the theme/icon theme,
+  // then fall back to a generic executable glyph.
+  function resolveIcon(name) {
+    if (!name) return ""
+    var themed = Quickshell.iconPath(name, true)
+    return themed
   }
 
   function renderCurrent() {

@@ -406,19 +406,27 @@ Item {
     }
 
     function apps(query: string): string {
-      var lib = service.shell && service.shell.appLibrary ? service.shell.appLibrary : null
-      if (!lib) return "[]"
-      var rows = lib.sortedEntries(String(query || ""))
+      // Enumerate the desktop application library directly. The shell proxy
+      // appLibrary is not guaranteed for a service-plugin shell, but the
+      // Quickshell DesktopEntries singleton is always available.
+      var values = DesktopEntries.applications.values || []
+      var q = String(query || "").toLowerCase()
       var out = []
-      for (var i = 0; i < rows.length; i++) {
-        var e = rows[i].entry
+      for (var i = 0; i < values.length; i++) {
+        var e = values[i]
+        var id = String(e.id || "")
+        var name = String(e.name || id)
+        if (!id) continue
+        if (q && name.toLowerCase().indexOf(q) === -1
+          && id.toLowerCase().indexOf(q) === -1) continue
         out.push({
-          id: String(e.id || ""),
-          name: lib.entryName(e),
-          subtext: lib.entrySubtext(e),
+          id: id,
+          name: name,
+          subtext: String(e.genericName || e.comment || ""),
           icon: String(e.icon || "")
         })
       }
+      out.sort(function(a, b) { return a.name.localeCompare(b.name) })
       return JSON.stringify(out)
     }
 
