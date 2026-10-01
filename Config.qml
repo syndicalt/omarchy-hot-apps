@@ -19,13 +19,12 @@ Item {
   // Handed over by the host: the live service instance (kinds: service + menu).
   property var service: null
 
-  readonly property var appLibrary: root.shell ? root.shell.appLibrary : null
-
   property string slot: "comma"
   property bool opened: false
   property string filter: ""
   property var appRows: []
   property var current: null
+  property int selectedIndex: -1
 
   function open(payloadJson) {
     var payload = {}
@@ -63,6 +62,7 @@ Item {
     }
     out.sort(function(a, b) { return a.name.localeCompare(b.name) })
     root.appRows = out
+    root.selectedIndex = out.length > 0 ? 0 : -1
     root.renderCurrent()
   }
 
@@ -70,8 +70,7 @@ Item {
   // then fall back to a generic executable glyph.
   function resolveIcon(name) {
     if (!name) return ""
-    var themed = Quickshell.iconPath(name, true)
-    return themed
+    return Quickshell.iconPath(name, true)
   }
 
   function renderCurrent() {
@@ -86,9 +85,24 @@ Item {
   function assign(id) {
     if (!id) return
     // Do not depend on service injection (unreliable for menu-kind panels):
-    // persist via the CLI IPC, which the service handles.
+    // persist via the CLI IPC, which the service handles. omarchy-shell is on
+    // the shell's PATH (verified).
     Quickshell.execDetached(["omarchy-shell", "hot-apps", "set", root.slot, id])
     root.close()
+  }
+
+  function moveSelection(delta) {
+    if (root.appRows.length === 0) return
+    var next = root.selectedIndex + delta
+    if (next < 0) next = 0
+    if (next > root.appRows.length - 1) next = root.appRows.length - 1
+    root.selectedIndex = next
+    appList.currentIndex = next
+  }
+
+  function selectCurrent() {
+    if (root.selectedIndex < 0 || root.selectedIndex >= root.appRows.length) return
+    root.assign(root.appRows[root.selectedIndex].id)
   }
 
   onFilterChanged: root.renderItems()
@@ -158,7 +172,19 @@ Item {
           focus: true
           onTextChanged: root.filter = text
           Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape) { root.close(); event.accepted = true }
+            if (event.key === Qt.Key_Escape) {
+              root.close()
+              event.accepted = true
+            } else if (event.key === Qt.Key_Up) {
+              root.moveSelection(-1)
+              event.accepted = true
+            } else if (event.key === Qt.Key_Down) {
+              root.moveSelection(1)
+              event.accepted = true
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              root.selectCurrent()
+              event.accepted = true
+            }
           }
         }
 
@@ -177,13 +203,23 @@ Item {
           clip: true
           model: root.appRows
           spacing: Style.space(4)
+          currentIndex: root.selectedIndex
+          highlightMoveDuration: 0
+          highlightResizeDuration: 0
+
+          highlight: Rectangle {
+            color: Util.alpha(Color.accent, 0.14)
+            radius: Style.space(6)
+          }
 
           delegate: Item {
             required property var modelData
             width: ListView.view.width
             height: Style.space(38)
 
+            // Top-most interaction layer: hover and click.
             MouseArea {
+              id: rowArea
               anchors.fill: parent
               hoverEnabled: true
               onClicked: root.assign(modelData.id)
@@ -192,7 +228,7 @@ Item {
             Rectangle {
               anchors.fill: parent
               radius: Style.space(6)
-              color: mouseArea.containsMouse ? Util.alpha(Color.accent, 0.12) : "transparent"
+              color: rowArea.containsMouse ? Util.alpha(Color.accent, 0.12) : "transparent"
             }
 
             Row {
@@ -214,6 +250,7 @@ Item {
 
                 Text {
                   text: modelData.name
+                  elide: Text.ElideRight
                   font.family: Style.font.family
                   font.pixelSize: Style.font.body
                   color: Color.popups.text
@@ -222,6 +259,7 @@ Item {
                 Text {
                   visible: modelData.subtext !== ""
                   text: modelData.subtext
+                  elide: Text.ElideRight
                   font.family: Style.font.family
                   font.pixelSize: Style.font.bodySmall
                   color: Util.alpha(Color.popups.text, 0.6)
