@@ -84,8 +84,10 @@ Item {
   }
 
   function assign(id) {
-    if (!root.service || !id) return
-    root.service.set(root.slot, id)
+    if (!id) return
+    // Do not depend on service injection (unreliable for menu-kind panels):
+    // persist via the CLI IPC, which the service handles.
+    Quickshell.execDetached(["omarchy-shell", "hot-apps", "set", root.slot, id])
     root.close()
   }
 
