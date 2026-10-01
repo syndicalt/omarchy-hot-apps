@@ -1,0 +1,4 @@
+#!/bin/bash
+# Dispatched by the dynamically-registered hotkeys. Wrapped in an absolute
+# path so the bind works regardless of the caller's PATH.
+omarchy-shell hot-apps toggle "$1"

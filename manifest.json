@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "syndicalt.hot-apps",
+  "name": "Hot Apps",
+  "version": "0.1.0",
+  "author": "syndicalt",
+  "description": "Two configurable hotkeys that launch, show, or hide any installed app on its own special workspace.",
+  "kinds": [
+    "service",
+    "menu"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "menu": "Config.qml"
+  },
+  "menu": {
+    "displayName": "Hot Apps",
+    "description": "Configure the two hot-app slots"
+  }
+}

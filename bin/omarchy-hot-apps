@@ -1,0 +1,49 @@
+#!/bin/bash
+# omarchy:summary=Manage the Hot Apps slots (list, assign, configure, toggle)
+# omarchy:group=plugin
+# omarchy:args=[list|set <slot> <app>|clear <slot>|apps [query]|config <slot>|toggle <slot>]
+# omarchy:examples=omarchy-plugin-hot-apps set comma discord
+
+set -euo pipefail
+
+PLUGIN_ID="syndicalt.hot-apps"
+
+usage() {
+  cat <<'EOF'
+Usage: omarchy-hot-apps <command> [args...]
+
+Commands:
+  list                      Show both slots and their assigned apps
+  set <slot> <app>          Assign an installed app to comma|period
+  clear <slot>              Remove the app from a slot
+  apps [query]              Search installed desktop entries (JSON)
+  config <slot>             Open the config picker for a slot
+  toggle <slot>             Run the slot's action (same as the hotkey)
+EOF
+  exit 0
+}
+
+cmd="${1:-}"
+[[ -n $cmd ]] || usage
+
+# Use the same launcher schools as Omarchy's own installers.
+if command -v omarchy-shell >/dev/null 2>&1; then
+  QS=omarchy-shell
+else
+  QS="$HOME/.local/bin/omarchy-shell"
+fi
+
+case "$cmd" in
+  list)  exec "$QS" hot-apps list ;;
+  apps)  exec "$QS" hot-apps apps "${2:-}" ;;
+  set)   [[ -n ${3:-} ]] || { echo "usage: set <slot> <app>" >&2; exit 1; }
+           exec "$QS" hot-apps set "$2" "$3" ;;
+  clear) [[ -n ${2:-} ]] || { echo "usage: clear <slot>" >&2; exit 1; }
+           exec "$QS" hot-apps clear "$2" ;;
+  config)[[ -n ${2:-} ]] || set -- config comma
+           exec "$QS" hot-apps config "$2" ;;
+  toggle)[[ -n ${2:-} ]] || { echo "usage: toggle <slot>" >&2; exit 1; }
+           exec "$QS" hot-apps toggle "$2" ;;
+  -h|--help) usage ;;
+  *) echo "unknown command: $cmd" >&2; usage ;;
+esac
