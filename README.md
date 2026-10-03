@@ -1,5 +1,9 @@
 # Omarchy Hot Apps
 
+<p align="center">
+  <img src="hot-apps-splash.png" alt="Hot Apps — two hotkeys, any installed app, its own special workspace" width="100%">
+</p>
+
 Two configurable hotkeys — `SUPER + SHIFT + ,` and `SUPER + SHIFT + .` — that
 launch, show, or hide **any installed app** on its own special workspace, with
 a config picker.
