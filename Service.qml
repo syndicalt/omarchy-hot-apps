@@ -38,7 +38,12 @@ Item {
   property var settings: ({})
   property var pendingLaunch: ({})   // { slot, at } while waiting to learn a class
   property string pendingToggle: ""  // slot awaiting a fresh client list
+  property var pendingTitleMoves: [] // generic terminal apps launched outside the hotkey
   property var lastRules: ({})       // slot -> class we have a window rule installed for
+  property var dispatchQueue: []
+  property var evalQueue: []
+  property var persistQueue: []
+  property int ruleVersion: 0
 
   readonly property int learnMs: 3500
 
@@ -71,9 +76,15 @@ Item {
     var b = JSON.stringify(service.settings)
     if (a === b) return
     var prev = service.settings
+    for (var slot in next) {
+      if (prev[slot] && prev[slot].desktopId !== next[slot].desktopId)
+        service.disableRule(slot)
+    }
     service.settings = next
     service.registerBinds()
-    service.reapplyRules()
+    service.lastRules = ({})
+    for (var ruleSlot in next)
+      if (next[ruleSlot].knownClass) service.applyRule(ruleSlot, next[ruleSlot].knownClass)
     // Preload newly-assigned (or newly-known) apps so `preload: true` behaves
     // like the old autostart lines did.
     for (var slot in next) {
@@ -96,8 +107,16 @@ Item {
   // Lua shim applies `hl.dispatch` there, while `hyprctl eval "hl.dsp...."`
   // returns "ok" without actually executing window moves.
   function runDispatch(lua) {
-    evalProc.command = ["hyprctl", "dispatch", lua]
-    evalProc.running = true
+    service.dispatchQueue = service.dispatchQueue.concat([lua])
+    service.runNextDispatch()
+  }
+
+  function runNextDispatch() {
+    if (dispatchProc.running || service.dispatchQueue.length === 0) return
+    var next = service.dispatchQueue[0]
+    service.dispatchQueue = service.dispatchQueue.slice(1)
+    dispatchProc.command = ["hyprctl", "dispatch", next]
+    dispatchProc.running = true
   }
 
   // Config-table helpers (hl.bind / hl.unbind / hl.window_rule) must go
@@ -105,7 +124,15 @@ Item {
   // return wrapping rejects them after the side effect, or on unbind never
   // applies at all.
   function runEval(lua) {
-    evalProc.command = ["hyprctl", "eval", lua]
+    service.evalQueue = service.evalQueue.concat([lua])
+    service.runNextEval()
+  }
+
+  function runNextEval() {
+    if (evalProc.running || service.evalQueue.length === 0) return
+    var next = service.evalQueue[0]
+    service.evalQueue = service.evalQueue.slice(1)
+    evalProc.command = ["hyprctl", "eval", next]
     evalProc.running = true
   }
 
@@ -117,13 +144,23 @@ Item {
   // the entry object; the shell preserves `id` and we must not drop fields.
   // Always refresh the menu row on top of the config write.
   function persistSettings() {
-    if (service.shell && typeof service.shell.updateEntryInline === "function") {
-      service.shell.updateEntryInline(service.pluginId, {
-        comma: service.settings.comma,
-        period: service.settings.period
-      })
-    }
+    var snapshot = JSON.stringify({
+      comma: service.settings.comma,
+      period: service.settings.period
+    })
+    service.persistQueue = service.persistQueue.concat([snapshot])
+    service.persistNextSettings()
     service.syncMenu()
+  }
+
+  function persistNextSettings() {
+    if (settingsProc.running || service.persistQueue.length === 0) return
+    var snapshot = service.persistQueue[0]
+    service.persistQueue = service.persistQueue.slice(1)
+    var script = service.home + "/.config/omarchy/plugins/"
+      + service.pluginId + "/bin/omarchy-hot-apps-persist"
+    settingsProc.command = ["bash", script, service.pluginId, snapshot]
+    settingsProc.running = true
   }
 
   // Update the Omarchy menu extension rows so each slot shows the assigned
@@ -159,6 +196,24 @@ Item {
     }
   }
 
+  Process {
+    id: settingsProc
+    command: []
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err && err !== "ok") console.warn("hot-apps settings persist:", err)
+      }
+    }
+    stderr: StdioCollector {
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err) console.warn("hot-apps settings persist:", err)
+      }
+    }
+    onExited: service.persistNextSettings()
+  }
+
   function registerBinds() {
     var lua = ""
     var slots = Toggler.slotKeys()
@@ -187,14 +242,32 @@ Item {
   // old bindings.lua/hyprland.lua pair did.
   function applyRule(slot, classPattern) {
     if (!classPattern) return
+    // Terminal applications inherit the terminal emulator's class. A class
+    // rule here would move every foot/kitty window, including unrelated apps.
+    if (service.isTerminalClass(classPattern)) return
     var s = service.settingsFor(slot)
     var special = s.special || slot
-    var lua = "hl.window_rule({ match = { class = " + luaQuote(classPattern) + " }, "
+    var ruleName = "hot-apps-" + slot + "-" + (++service.ruleVersion)
+    var lua = "_G.__hotAppsRules = _G.__hotAppsRules or {}; "
+      + "local old = _G.__hotAppsRules[" + luaQuote(slot) + "]; "
+      + "if old then old:set_enabled(false) end; "
+      + "_G.__hotAppsRules[" + luaQuote(slot) + "] = hl.window_rule({ name = "
+      + luaQuote(ruleName) + ", match = { class = " + luaQuote(classPattern) + " }, "
       + "workspace = " + luaQuote("special:" + special + " silent") + ", "
       + "float = true, center = true, no_initial_focus = true, "
       + "size = { \"monitor_w * 0.98\", \"monitor_h * 0.85\" } })"
     service.lastRules[slot] = classPattern
     service.runEval(lua)
+  }
+
+  function disableRule(slot) {
+    var lua = "if _G.__hotAppsRules and _G.__hotAppsRules[" + luaQuote(slot) + "] then "
+      + "_G.__hotAppsRules[" + luaQuote(slot) + "]:set_enabled(false); "
+      + "_G.__hotAppsRules[" + luaQuote(slot) + "] = nil end"
+    service.runEval(lua)
+    var next = ({})
+    for (var key in service.lastRules) if (key !== slot) next[key] = service.lastRules[key]
+    service.lastRules = next
   }
 
   function reapplyRules() {
@@ -207,6 +280,13 @@ Item {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   }
 
+  function titleMatchesDesktopId(title, desktopId) {
+    var value = String(title || "").toLowerCase()
+    var id = String(desktopId || "").toLowerCase()
+    return !!id && (value === id || value.endsWith(" | " + id)
+      || value.endsWith(" - " + id) || value.endsWith(" — " + id))
+  }
+
   function findWindow(slot) {
     if (service.clients.length === 0) return null
     var s = service.settingsFor(slot)
@@ -214,13 +294,33 @@ Item {
     var needle = s.knownClass || Toggler.normalizeDesktopId(s.desktopId)
     var re = new RegExp(service.escapeRegex(needle), "i")
     var lower = needle.toLowerCase()
+    var desktopId = Toggler.normalizeDesktopId(s.desktopId).toLowerCase()
+    var i, c, title
+    // Terminal=true desktop entries appear as the terminal's class (for
+    // Cliamp, `foot`) while the running app is identified by its title.
+    // Prefer an exact title match so unrelated terminal windows are ignored.
+    if (desktopId) {
+      for (i = 0; i < service.clients.length; i++) {
+        c = service.clients[i]
+        title = String(c.title || "")
+        if (service.titleMatchesDesktopId(title, desktopId)) return c
+      }
+    }
+    if (service.isTerminalClass(s.knownClass)) return null
     // Exact class match wins over the loose pattern so a sibling app that
     // merely contains the id (code vs code-oss) is never picked when both run.
-    var i, c
+    // A shared terminal class is ambiguous; don't toggle an arbitrary shell.
+    var exactClass = null
+    var exactClassCount = 0
     for (i = 0; i < service.clients.length; i++) {
       c = service.clients[i]
-      if (typeof c.class === "string" && c.class.toLowerCase() === lower) return c
+      if (typeof c.class === "string" && c.class.toLowerCase() === lower) {
+        exactClass = c
+        exactClassCount++
+      }
     }
+    if (exactClassCount === 1) return exactClass
+    if (exactClassCount > 1) return null
     for (i = 0; i < service.clients.length; i++) {
       c = service.clients[i]
       if (typeof c.class === "string" && re.test(c.class)) return c
@@ -228,17 +328,33 @@ Item {
     return null
   }
 
-  // ------------------------------------------------------------ launch flow
-
-  // Toggle the special workspace into view, creating it if needed. A nested
-  // `hyprctl dispatch` (through exec_cmd) is required: this Hyprland's Lua
-  // shim toggle_special does not create a workspace that does not exist yet.
-  function showSpecial(special) {
-    if (service.specialVisible(special)) return
-    service.runDispatch("hl.dsp.exec_cmd(" + luaQuote(
-      "hyprctl dispatch hl.dsp.workspace.toggle_special(" + luaQuote(special) + ")"
-    ) + ")")
+  // Some desktop launchers (Docker Desktop and several small GUI apps) use a
+  // window class that bears no relation to the desktop entry id. During a
+  // cold launch, identify the new Hyprland client by comparing addresses with
+  // the client list captured immediately before launch.
+  function findPendingWindow(pending) {
+    var matched = service.findWindow(pending.slot)
+    if (matched) return matched
+    var before = pending.existingAddresses || ({})
+    var desktopId = service.settingsFor(pending.slot).desktopId.toLowerCase()
+    for (var i = service.clients.length - 1; i >= 0; i--) {
+      var c = service.clients[i]
+      if (!c || !c.address || before[String(c.address)]) continue
+      if (service.isTerminalClass(c.class)) {
+        if (service.titleMatchesDesktopId(c.title, desktopId)) return c
+        continue
+      }
+      return c
+    }
+    return null
   }
+
+  function isTerminalClass(className) {
+    return /^(foot|footclient|kitty|alacritty|wezterm|xterm|urxvt|st|gnome-terminal|konsole)$/i
+      .test(String(className || ""))
+  }
+
+  // ------------------------------------------------------------ launch flow
 
   function specialVisible(special) {
     for (var i = 0; i < service.monitors.length; i++) {
@@ -246,6 +362,56 @@ Item {
       if (String(sw.name || "") === "special:" + special) return true
     }
     return false
+  }
+
+  function moveToSpecial(address, slot) {
+    var s = service.settingsFor(slot)
+    var special = s.special || slot
+    service.runDispatch("hl.dsp.window.move({ workspace = " + luaQuote("special:" + special)
+      + ", window = " + luaQuote("address:" + address) + ", follow = false })")
+    service.runDispatch("hl.dsp.window.float({ window = " + luaQuote("address:" + address) + " })")
+    service.runDispatch("hl.dsp.window.center({ window = " + luaQuote("address:" + address) + " })")
+  }
+
+  function queueAssignedWindowMove(address, slot) {
+    if (address.indexOf("0x") !== 0) address = "0x" + address
+    var pending = service.pendingTitleMoves.slice()
+    for (var i = 0; i < pending.length; i++)
+      if (pending[i].address === address && pending[i].slot === slot) return
+    pending.push({ address: address, slot: slot })
+    service.pendingTitleMoves = pending
+    service.refreshState()
+  }
+
+  function onWindowTitleEvent(data) {
+    var value = String(data || "")
+    var comma = value.indexOf(",")
+    if (comma <= 0) return
+    var address = value.slice(0, comma).trim()
+    var title = value.slice(comma + 1).trim().toLowerCase()
+    var slots = Toggler.slotKeys()
+    for (var i = 0; i < slots.length; i++) {
+      var slot = slots[i]
+      var s = service.settingsFor(slot)
+      if (!s.desktopId || !service.titleMatchesDesktopId(title, s.desktopId)) continue
+      service.queueAssignedWindowMove(address, slot)
+    }
+  }
+
+  function onOpenWindowEvent(data) {
+    var fields = String(data || "").split(",")
+    if (fields.length < 3) return
+    var address = fields[0].trim()
+    var className = fields[2].trim().toLowerCase()
+    var title = fields.length > 3 ? fields.slice(3).join(",").trim().toLowerCase() : ""
+    var slots = Toggler.slotKeys()
+    for (var i = 0; i < slots.length; i++) {
+      var slot = slots[i]
+      var id = service.settingsFor(slot).desktopId.toLowerCase()
+      if (id && (service.titleMatchesDesktopId(title, id)
+        || className === id || className.indexOf(id) !== -1))
+        service.queueAssignedWindowMove(address, slot)
+    }
   }
 
   // Called by the IPC handler; defers until a fresh client list is loaded so
@@ -275,22 +441,30 @@ Item {
         })
         service.settings = next
         service.persistSettings()
+        service.applyRule(slot, String(win.class || ""))
       }
       var onSpecial = String(win.workspace && win.workspace.name || "") === "special:" + special
       if (onSpecial) {
         // Window already lives on its special workspace: flip visibility.
         service.runDispatch("hl.dsp.workspace.toggle_special(" + luaQuote(special) + ")")
       } else {
-        // A special workspace must exist before a window can move onto it.
-        service.showSpecial(special)
         service.runDispatch("hl.dsp.window.move({ workspace = " + luaQuote("special:" + special)
           + ", window = " + luaQuote("address:" + win.address) + ", follow = false })")
+        // Moving creates the special workspace if necessary. Reveal it only
+        // after the move so the first keypress both initializes and summons.
+        if (!service.specialVisible(special))
+          service.runDispatch("hl.dsp.workspace.toggle_special(" + luaQuote(special) + ")")
       }
+      service.runDispatch("hl.dsp.window.float({ window = " + luaQuote("address:" + win.address) + " })")
+      service.runDispatch("hl.dsp.window.center({ window = " + luaQuote("address:" + win.address) + " })")
       return
     }
     // Cold start. If we already learned the window class (previous launch),
     // install the rule so the window lands on special:<name> silent directly.
-    service.pendingLaunch = { slot: slot, at: Date.now(), reveal: true }
+    service.pendingLaunch = {
+      slot: slot, at: Date.now(), reveal: true,
+      existingAddresses: service.clientAddresses()
+    }
     if (service.guessClass(slot)) service.applyRule(slot, service.guessClass(slot))
     service.runDispatch("hl.dsp.exec_cmd(" + luaQuote(service.launchCommand(s)) + ")")
     // Poll for the window (some apps open in an existing browser session and
@@ -317,14 +491,30 @@ Item {
 
   function guessClass(slot) {
     var s = service.settingsFor(slot)
+    if (s.knownClass && !service.isTerminalClass(s.knownClass)) return s.knownClass
+    // Cliamp is launched in a dedicated Foot app-id, so its future window
+    // class is the desktop id rather than Foot's shared terminal class.
+    if (Toggler.normalizeDesktopId(s.desktopId).toLowerCase() === "cliamp") return "cliamp"
     if (s.knownClass) return s.knownClass
     return ""
+  }
+
+  function clientAddresses() {
+    var out = ({})
+    for (var i = 0; i < service.clients.length; i++) {
+      var address = String(service.clients[i].address || "")
+      if (address) out[address] = true
+    }
+    return out
   }
 
   function launchSlot(slot, hidden) {
     var s = service.settingsFor(slot)
     if (!s.desktopId) return
-    service.pendingLaunch = { slot: slot, at: Date.now(), reveal: !hidden }
+    service.pendingLaunch = {
+      slot: slot, at: Date.now(), reveal: !hidden,
+      existingAddresses: service.clientAddresses()
+    }
     if (service.guessClass(slot)) service.applyRule(slot, service.guessClass(slot))
     service.runDispatch("hl.dsp.exec_cmd(" + luaQuote(service.launchCommand(s)) + ")")
     learnTimer.restart()
@@ -342,7 +532,7 @@ Item {
       service.pendingLaunch = ({})
       return
     }
-    var win = service.findWindow(pending.slot)
+    var win = service.findPendingWindow(pending)
     if (!win) return
     var cls = String(win.class || "")
     var addr = String(win.address || "")
@@ -356,17 +546,21 @@ Item {
       var next = Toggler.mergeSettings(service.settings, slot, { knownClass: cls })
       service.settings = next
       service.persistSettings()
+      service.applyRule(slot, cls)
     }
 
-    // The workspace must exist first. `showSpecial` creates it via the nested
-    // dispatcher; then move/float/center the real window.
-    service.showSpecial(special)
-    if (addr) {
+    // Moving creates the special workspace when needed; reveal it only after
+    // the move, so cold start takes one hotkey press.
+    var onSpecial = String(win.workspace && win.workspace.name || "") === "special:" + special
+    var wasVisible = service.specialVisible(special)
+    if (addr && !onSpecial) {
       service.runDispatch("hl.dsp.window.move({ workspace = " + luaQuote("special:" + special)
         + ", window = " + luaQuote("address:" + addr) + ", follow = false })")
       service.runDispatch("hl.dsp.window.float({ window = " + luaQuote("address:" + addr) + " })")
       service.runDispatch("hl.dsp.window.center({ window = " + luaQuote("address:" + addr) + " })")
     }
+    if (pending.reveal && !wasVisible)
+      service.runDispatch("hl.dsp.workspace.toggle_special(" + luaQuote(special) + ")")
   }
 
   function openConfig(slot) {
@@ -398,6 +592,7 @@ Item {
         special: slot,
         knownClass: ""
       })
+      service.disableRule(slot)
       service.settings = next
       service.persistSettings()
       var other = slot === "comma" ? "period" : "comma"
@@ -414,6 +609,7 @@ Item {
         desktopId: "",
         knownClass: ""
       })
+      service.disableRule(slot)
       service.settings = next
       service.persistSettings()
       return "ok"
@@ -499,6 +695,27 @@ Item {
           var state = JSON.parse(String(text || "{}"))
           service.clients = Array.isArray(state.clients) ? state.clients : []
           service.monitors = Array.isArray(state.monitors) ? state.monitors : []
+          var titleMoves = service.pendingTitleMoves
+          service.pendingTitleMoves = []
+          for (var i = 0; i < titleMoves.length; i++) {
+            var move = titleMoves[i]
+            if (service.pendingLaunch.slot === move.slot) continue
+            var s = service.settingsFor(move.slot)
+            for (var j = 0; j < service.clients.length; j++) {
+              var c = service.clients[j]
+              var id = s.desktopId.toLowerCase()
+              var title = String(c.title || "").toLowerCase()
+              var className = String(c.class || "").toLowerCase()
+              if (String(c.address || "") === move.address
+                && (service.titleMatchesDesktopId(title, id)
+                  || className === id || className.indexOf(id) !== -1)) {
+                var special = s.special || move.slot
+                if (String(c.workspace && c.workspace.name || "") !== "special:" + special)
+                  service.moveToSpecial(move.address, move.slot)
+                break
+              }
+            }
+          }
           service.pollLearn()
           if (service.pendingToggle) {
             var slot = service.pendingToggle
@@ -522,6 +739,22 @@ Item {
         if (err && err !== "ok") console.warn("hot-apps eval:", err)
       }
     }
+    onExited: service.runNextEval()
+  }
+
+  // Serialize dispatcher calls: special workspace creation/show must finish
+  // before the new window is moved onto it. Reusing one Process without a
+  // queue can replace its command while the previous hyprctl is still active.
+  Process {
+    id: dispatchProc
+    command: []
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var err = String(text || "").trim()
+        if (err && err !== "ok") console.warn("hot-apps dispatch:", err)
+      }
+    }
+    onExited: service.runNextDispatch()
   }
 
   FileView {
@@ -541,6 +774,9 @@ Item {
     target: Hyprland
     function onRawEvent(event) {
       var name = String(event.name)
+      if (name === "openwindow") service.onOpenWindowEvent(event.data)
+      if (name === "windowtitlev2" || name === "windowtitle")
+        service.onWindowTitleEvent(event.data)
       if (name === "configreloaded") {
         rebindTimer.restart()
         service.reapplyRules()

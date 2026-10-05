@@ -84,11 +84,10 @@ Item {
 
   function assign(id) {
     if (!id) return
-    // Persist via the CLI IPC. Use the string form (Menu.qml's runAction
-    // pattern) with an absolute path — execDetached does not resolve
-    // PATH-dependent commands reliably from the panel's environment.
-    Util.execDetached("/usr/share/omarchy/bin/omarchy-shell hot-apps set "
-      + Util.shellQuote(root.slot) + " " + Util.shellQuote(id))
+    // Persist through the service IPC. execArgv keeps the selected desktop id
+    // as one argument (PWA ids commonly contain punctuation), and uses a
+    // login shell so omarchy-shell resolves through the user's configured PATH.
+    Util.execArgv(["omarchy-shell", "hot-apps", "set", root.slot, String(id)])
     root.close()
   }
 
