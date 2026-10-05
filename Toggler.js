@@ -88,5 +88,10 @@ function shellQuote(value) {
 // Launches via the desktop entry, the same resolver Omarchy's AppLibrary
 // uses (supports ids with spaces and entries UWSM rejects).
 function launchCommand(desktopId) {
+  // Cliamp is a Terminal=true desktop entry, so gtk-launch opens it in Foot
+  // with Foot's shared class. Give hot-app launches a dedicated app id so the
+  // window rule can place it on its special workspace before it is shown.
+  if (String(desktopId || "").replace(/\.desktop$/i, "").toLowerCase() === "cliamp")
+    return "foot --app-id=cliamp --title=cliamp cliamp"
   return "gtk-launch " + shellQuote(String(desktopId || "") + ".desktop")
 }

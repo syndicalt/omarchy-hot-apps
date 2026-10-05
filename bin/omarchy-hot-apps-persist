@@ -1,0 +1,23 @@
+#!/bin/bash
+# omarchy:summary=Persist Hot Apps slot settings
+# omarchy:internal
+set -euo pipefail
+
+plugin_id=${1:?plugin id required}
+settings=${2:?settings JSON required}
+config="$HOME/.config/omarchy/shell.json"
+[ -f "$config" ] || { echo "shell.json not found: $config" >&2; exit 1; }
+
+lock="${config}.lock"
+exec 9>"$lock"
+flock 9
+
+tmp=$(mktemp "${config}.tmp.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+jq --arg id "$plugin_id" --argjson settings "$settings" \
+  '(.plugins[] | select(.id == $id)) |= . + $settings' \
+  "$config" > "$tmp"
+chmod --reference="$config" "$tmp"
+mv "$tmp" "$config"
+trap - EXIT
+echo ok
